@@ -68,21 +68,25 @@ def load_gistemp():
 @st.cache_data(ttl=6*60*60, show_spinner=False)
 def load_power_monthly(lat, lon, start_year, end_year):
     url = "https://power.larc.nasa.gov/api/temporal/monthly/point"
-    params = {"parameters":"T2M,PRECTOTCORR,RH2M", "community":"AG", "longitude":lon,
+    params = {"parameters":"T2M,PRECTOTCORR,RH2M,GWETROOT", "community":"AG", "longitude":lon,
               "latitude":lat, "format":"JSON", "start":start_year, "end":end_year}
     r = requests.get(url, params=params, timeout=45)
     r.raise_for_status()
     payload = r.json()
     p = payload.get("properties", {}).get("parameter", {})
     frames = []
-    for key, label, unit in [("T2M","Air temperature","°C"),("PRECTOTCORR","Precipitation","mm/day"),("RH2M","Relative humidity","%")]:
+    for key, label, unit in [("T2M","Air temperature","°C"),("PRECTOTCORR","Precipitation","mm/day"),("RH2M","Relative humidity","%"),("GWETROOT","Root-zone soil wetness","fraction")]:
         if key not in p:
             continue
         s = pd.Series(p[key], dtype="float64")
         s = s[s < 900]
         f = s.rename("value").reset_index()
         f.columns = ["yyyymm","value"]
-        f["date"] = pd.to_datetime(f["yyyymm"].astype(str), format="%Y%m")
+        # POWER JSON keys are usually YYYYMM but can be decoded as YYYYMM.0
+        # by pandas/numpy in some versions. Keep only the first six digits.
+        date_keys = f["yyyymm"].astype(str).str.extract(r"(\d{6})", expand=False)
+        f["date"] = pd.to_datetime(date_keys, format="%Y%m", errors="coerce")
+        f = f.dropna(subset=["date"])
         f["parameter"] = label
         f["unit"] = unit
         frames.append(f[["date","value","parameter","unit"]])
@@ -385,22 +389,28 @@ def load_global_sea_level():
 
 
 @st.cache_data(ttl=24*60*60, show_spinner=False)
-def load_power_global_region(parameter, start_year, end_year):
-    # POWER regional service returns an area-aggregated time series for the requested box.
-    url = "https://power.larc.nasa.gov/api/temporal/monthly/regional"
-    params = {"parameters":parameter, "community":"AG", "latitude-min":-60,
-              "latitude-max":70, "longitude-min":-180, "longitude-max":180,
-              "format":"JSON", "start":start_year, "end":end_year}
-    r = requests.get(url, params=params, timeout=60, headers={"User-Agent":"EarthPulseDashboard/2.0"})
+def load_power_global_region(parameter, start_year, end_year, lat=0.0, lon=0.0):
+    """Fetch a NASA POWER monthly point series.
+
+    The POWER regional endpoint does not support a whole-world bounding box.
+    This intentionally uses the selected dashboard coordinate and is labelled
+    point-level in the UI rather than misrepresenting it as a global mean.
+    """
+    url = "https://power.larc.nasa.gov/api/temporal/monthly/point"
+    params = {"parameters":parameter, "community":"AG", "latitude":lat,
+              "longitude":lon, "format":"JSON", "start":start_year, "end":end_year}
+    r = requests.get(url, params=params, timeout=60, headers={"User-Agent":"EarthPulseDashboard/2.1"})
     r.raise_for_status()
     payload = r.json()
     series = payload.get("properties", {}).get("parameter", {}).get(parameter, {})
     if not series:
-        raise ValueError(f"NASA POWER returned no values for {parameter}.")
+        raise ValueError(f"NASA POWER returned no values for {parameter} at ({lat}, {lon}).")
     out = pd.Series(series, dtype="float64").rename("value").reset_index()
     out.columns = ["yyyymm", "value"]
+    date_keys = out["yyyymm"].astype(str).str.extract(r"(\d{6})", expand=False)
+    out["date"] = pd.to_datetime(date_keys, format="%Y%m", errors="coerce")
+    out = out.dropna(subset=["date"])
     out = out[out.value < 900]
-    out["date"] = pd.to_datetime(out.yyyymm.astype(str), format="%Y%m")
     return out[["date", "value"]].sort_values("date").reset_index(drop=True)
 
 
@@ -485,18 +495,18 @@ with ice_tab:
 
 with water_tab:
     st.subheader("Global water-cycle indicators")
-    st.caption("NASA POWER regional monthly estimates averaged over the broad 60°S–70°N latitude belt and all longitudes. This is a regional-service aggregate, not a complete polar-to-polar global climate grid.")
+    st.caption(f"NASA POWER monthly estimates at the selected dashboard coordinate ({lat:.1f}°, {lon:.1f}°). This is a point-level series, not a global average. The regional API does not accept a whole-world bounding box.")
     variable = st.selectbox("Select NASA POWER parameter", ["PRECTOTCORR", "GWETROOT"], format_func=lambda x: {"PRECTOTCORR":"Precipitation (mm/day)","GWETROOT":"Root-zone soil wetness (fraction)"}[x])
     try:
-        with st.spinner("Loading NASA POWER regional observations…"):
-            water = load_power_global_region(variable, 2001, datetime.now().year-1)
+        with st.spinner("Loading NASA POWER point observations…"):
+            water = load_power_global_region(variable, 2001, datetime.now().year-1, lat, lon)
         water_forecast, water_scores, water_model, water_hist = _numeric_forecast(water, horizon=horizon, min_points=60)
         w1,w2,w3 = st.columns(3)
         w1.metric("Latest regional value", f"{water_hist.iloc[-1].value:.2f}", water_hist.iloc[-1].date.strftime("%B %Y"))
         w2.metric("Selected forecast model", water_model)
         w3.metric("Forecast endpoint", f"{water_forecast.iloc[-1].prediction:.2f}", water_forecast.iloc[-1].date.strftime("%B %Y"))
         f = go.Figure()
-        f.add_trace(go.Scatter(x=water_hist.date,y=water_hist.value,name="NASA POWER regional observation",line=dict(color="#64c9d8",width=1.8)))
+        f.add_trace(go.Scatter(x=water_hist.date,y=water_hist.value,name="NASA POWER point observation",line=dict(color="#64c9d8",width=1.8)))
         f.add_trace(go.Scatter(x=water_forecast.date,y=water_forecast.upper,name="Upper residual range",line=dict(width=0),showlegend=False))
         f.add_trace(go.Scatter(x=water_forecast.date,y=water_forecast.lower,name="Approx. residual range",line=dict(width=0),fill="tonexty",fillcolor="rgba(245,166,78,.18)"))
         f.add_trace(go.Scatter(x=water_forecast.date,y=water_forecast.prediction,name="Experimental forecast",line=dict(color="#f5a64e",dash="dash",width=2.5)))
@@ -511,5 +521,5 @@ with water_tab:
 
 st.divider()
 st.subheader("Data provenance for Earth Pulse 2.0")
-st.markdown("- **Temperature:** NASA GISTEMP v4 global land–ocean temperature index.\n- **CO₂:** NOAA Global Monitoring Laboratory global marine surface monthly mean (complementary source; not NASA OCO-2).\n- **Sea level:** NOAA STAR satellite-altimetry time series, NASA/JPL-derived global product.\n- **Arctic sea ice:** NOAA at NSIDC Sea Ice Index Version 4.\n- **Water cycle:** NASA POWER regional monthly meteorological service.")
+st.markdown("- **Temperature:** NASA GISTEMP v4 global land–ocean temperature index.\n- **CO₂:** NOAA Global Monitoring Laboratory global marine surface monthly mean (complementary source; not NASA OCO-2).\n- **Sea level:** NOAA STAR satellite-altimetry time series, NASA/JPL-derived global product.\n- **Arctic sea ice:** NOAA at NSIDC Sea Ice Index Version 4.\n- **Water cycle:** NASA POWER monthly point meteorological service.")
 st.caption("Forecasts are experimental statistical estimates. They are not official NASA, NOAA or NSIDC forecasts. Data availability, source revisions, missing values and changes in source-file formats can affect the dashboard.")
