@@ -22,9 +22,9 @@ NASA_EARTHDATA = "https://www.earthdata.nasa.gov/"
 st.markdown("""
 <style>
 :root { color-scheme: dark; }
-.block-container {padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1500px;}
-.hero {padding: 1.5rem 1.7rem; border: 1px solid rgba(120,170,190,.25); border-radius: 18px; background: linear-gradient(115deg, rgba(13,45,67,.95), rgba(12,25,44,.96)); margin-bottom: 1rem;}
-.kicker {letter-spacing: .16em; text-transform: uppercase; color: #78c7d4; font-size: .72rem; font-weight: 700;}
+.block-container {padding-top: 2rem; padding-bottom: 3rem; max-width: 1500px;}
+.hero {box-sizing: border-box; display: flow-root; overflow: visible; padding: 2rem 1.7rem 1.5rem; border: 1px solid rgba(120,170,190,.25); border-radius: 18px; background: linear-gradient(115deg, rgba(13,45,67,.95), rgba(12,25,44,.96)); margin: .5rem 0 1rem; min-height: 190px;}
+.kicker {display: block; position: relative; line-height: 1.5; margin: 0 0 .65rem; padding: .1rem 0; letter-spacing: .16em; text-transform: uppercase; color: #8be2ed; font-size: .78rem; font-weight: 800; opacity: 1; visibility: visible;}
 .hero h1 {font-size: clamp(2rem,4vw,3.1rem); margin: .3rem 0 .25rem; color: #f4fbff;}
 .hero p {color: #bfd2df; margin: 0;}
 .source-note {font-size: .82rem; color: #9fb4c3;}
